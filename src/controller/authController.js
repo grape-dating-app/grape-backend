@@ -2,12 +2,20 @@
 
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+const { User, userSchema } = require('../models/userModel');
+const emailService = require('../utils/emailService');
 require('dotenv').config();
 
 // Generate JWT token 
 const generateToken = (user) => {
   return jwt.sign(
-    { uid: user.localId || user.uid, email: user.email },
+    { 
+      uid: user.id || user.localId || user.uid,
+      email: user.email,
+      phone: user.phone_number,
+      isProfileComplete: !!user.first_name, // Check if basic profile is complete
+      isEmailVerified: !!user.email_verified
+    },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -19,19 +27,20 @@ exports.sendOTP = async (req, res) => {
     const { phoneNumber } = req.body;
     
     if (!phoneNumber) {
-      return res.status(400).json({ success: false, message: 'Phone number is required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Phone number is required' 
+      });
     }
 
+    // Check if user exists with this phone number
+    const existingUser = await User.findByPhone(phoneNumber);
+    
     // Firebase Auth REST API for sending verification code
     const url = `https://identitytoolkit.googleapis.com/v1/accounts:sendVerificationCode?key=${process.env.FIREBASE_WEB_API_KEY}`;
     
     const data = {
-      phoneNumber,
-      // Using a "zero-trust" approach without reCAPTCHA
-      // This sends SMS without requiring reCAPTCHA verification
-      autoRetrievalInfo: {
-        appSignatureHash: "FIREBASE_APP_HASH" // Replace with your app hash in a production environment
-      }
+      phoneNumber
     };
 
     const response = await axios.post(url, data);
@@ -40,7 +49,8 @@ exports.sendOTP = async (req, res) => {
     return res.status(200).json({ 
       success: true, 
       message: 'OTP sent successfully',
-      sessionInfo: response.data.sessionInfo
+      sessionInfo: response.data.sessionInfo,
+      userExists: !!existingUser
     });
   } catch (error) {
     console.error('Error sending OTP:', error.response?.data || error.message);
@@ -52,13 +62,16 @@ exports.sendOTP = async (req, res) => {
   }
 };
 
-// Verify OTP and check if user exists using Firebase Auth REST API
+// Verify OTP and check if user exists
 exports.verifyOTP = async (req, res) => {
   try {
     const { sessionInfo, code } = req.body;
     
     if (!sessionInfo || !code) {
-      return res.status(400).json({ success: false, message: 'Session info and verification code are required' });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Session info and verification code are required' 
+      });
     }
 
     // Firebase Auth REST API for verifying OTP
@@ -70,54 +83,38 @@ exports.verifyOTP = async (req, res) => {
     };
 
     const response = await axios.post(url, data);
+    const { phoneNumber } = response.data;
     
-    // Get user details from the response
-    const { idToken, localId } = response.data;
+    // Check if user exists in our database
+    const existingUser = await User.findByPhone(phoneNumber);
     
-    // Check if this user has an email (exists in our system)
-    // Firebase Auth REST API to get user data
-    const userInfoUrl = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_WEB_API_KEY}`;
-    
-    const userInfoResponse = await axios.post(userInfoUrl, {
-      idToken
-    });
-    
-    const users = userInfoResponse.data.users;
-    const userExists = users && users[0] && users[0].email;
-    
-    if (userExists) {
+    if (existingUser) {
       // User exists, generate JWT token
-      const userData = users[0];
-      const jwtToken = generateToken(userData);
+      const jwtToken = generateToken(existingUser);
       
       return res.status(200).json({
         success: true,
         message: 'OTP verified and user exists',
         token: jwtToken,
-        firebaseToken: idToken, // Might be needed for some Firebase operations
+        firebaseToken: response.data.idToken,
         userExists: true,
-        user: {
-          uid: userData.localId,
-          email: userData.email,
-          phoneNumber: userData.phoneNumber
-        }
+        user: existingUser
       });
     } else {
-      // User doesn't exist or doesn't have an email yet
-      // We still provide a temporary token with limited claims
-      const tempUserData = { localId, phoneNumber: response.data.phoneNumber };
-      const tempToken = generateToken(tempUserData);
+      // User doesn't exist, provide a temporary token
+      const tempToken = generateToken({ 
+        phone_number: phoneNumber,
+        isProfileComplete: false,
+        isEmailVerified: false
+      });
       
       return res.status(200).json({
         success: true,
-        message: 'OTP verified but user registration needed',
+        message: 'OTP verified but registration needed',
         token: tempToken,
-        firebaseToken: idToken,
+        firebaseToken: response.data.idToken,
         userExists: false,
-        user: {
-          uid: localId,
-          phoneNumber: response.data.phoneNumber
-        }
+        phoneNumber
       });
     }
   } catch (error) {
@@ -130,58 +127,127 @@ exports.verifyOTP = async (req, res) => {
   }
 };
 
-// Register new user with email after OTP verification
-exports.registerUser = async (req, res) => {
+// Send email verification OTP
+exports.sendEmailOTP = async (req, res) => {
   try {
-    const { firebaseToken, email } = req.body;
-    
-    if (!firebaseToken || !email) {
-      return res.status(400).json({ success: false, message: 'Firebase token and email are required' });
+    const { email } = req.body;
+    const phoneNumber = req.user.phone; // From JWT token
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required' });
     }
 
-    // Update user profile with email
-    const url = `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${process.env.FIREBASE_WEB_API_KEY}`;
-    
-    const data = {
-      idToken: firebaseToken,
-      email,
-      returnSecureToken: true
-    };
+    // Check if email is already registered
+    const existingEmail = await User.findByEmail(email);
+    if (existingEmail) {
+      return res.status(400).json({ success: false, message: 'Email already registered' });
+    }
 
-    const response = await axios.post(url, data);
-    
-    // Get updated user info
-    const userInfoUrl = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${process.env.FIREBASE_WEB_API_KEY}`;
-    
-    const userInfoResponse = await axios.post(userInfoUrl, {
-      idToken: response.data.idToken
-    });
-    
-    const userData = userInfoResponse.data.users[0];
-    
-    // Generate a new JWT token with updated user info
-    const jwtToken = generateToken(userData);
-
-    // Here you would also save the user to your Supabase/Postgres database
-    // For now just returning success with the new token
+    // Send verification email
+    await emailService.sendVerificationEmail(email);
 
     return res.status(200).json({
       success: true,
-      message: 'User registered successfully',
-      token: jwtToken,
-      firebaseToken: response.data.idToken,
-      user: {
-        uid: userData.localId,
-        email: userData.email,
-        phoneNumber: userData.phoneNumber
-      }
+      message: 'Email verification code sent successfully'
     });
   } catch (error) {
-    console.error('Error registering user:', error.response?.data || error.message);
+    console.error('Error sending email verification:', error);
     return res.status(500).json({ 
       success: false, 
-      message: 'Registration failed', 
-      error: error.response?.data?.error?.message || error.message 
+      message: 'Failed to send email verification', 
+      error: error.message 
+    });
+  }
+};
+
+// Verify email OTP and start registration
+exports.verifyEmailOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const phoneNumber = req.user.phone;
+
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: 'Email and OTP are required' });
+    }
+
+    // Verify the email OTP
+    const isValid = emailService.verifyEmailOTP(email, otp);
+    if (!isValid) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    // Create initial user record with verified email
+    const user = await User.createInitial(phoneNumber, email, true);
+    
+    // Generate new token with user ID
+    const token = generateToken(user);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Email verified and registration started',
+      token,
+      user
+    });
+  } catch (error) {
+    console.error('Error verifying email:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Email verification failed', 
+      error: error.message 
+    });
+  }
+};
+
+// Complete user profile
+exports.completeProfile = async (req, res) => {
+  try {
+    const userId = req.user.uid; // From JWT token
+    const profileData = req.body;
+
+    // Update user profile
+    const updatedUser = await User.updateProfile(userId, profileData);
+
+    // Generate new token with updated profile status
+    const token = generateToken(updatedUser);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Profile updated successfully',
+      token,
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Profile update failed', 
+      error: error.message 
+    });
+  }
+};
+
+// Update user location
+exports.updateLocation = async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { latitude, longitude } = req.body;
+
+    if (!latitude || !longitude) {
+      return res.status(400).json({ success: false, message: 'Latitude and longitude are required' });
+    }
+
+    await User.updateLocation(userId, latitude, longitude);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Location updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating location:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Location update failed', 
+      error: error.message 
     });
   }
 };

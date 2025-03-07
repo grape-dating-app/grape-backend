@@ -5,14 +5,16 @@ const router = express.Router();
 const authController = require('../controller/authController');
 const { authenticateToken } = require('../middleware/auth');
 
-// Route to send OTP
+// Phone verification routes
 router.post('/send-otp', authController.sendOTP);
-
-// Route to verify OTP
 router.post('/verify-otp', authController.verifyOTP);
 
-// Route to register a new user after OTP verification
-// This route requires authentication with the temporary token
-router.post('/register', authenticateToken, authController.registerUser);
+// Email verification routes
+router.post('/send-email-otp', authenticateToken, authController.sendEmailOTP);
+router.post('/verify-email-otp', authenticateToken, authController.verifyEmailOTP);
+
+// Profile routes
+router.post('/complete-profile', authenticateToken, authController.completeProfile);
+router.post('/update-location', authenticateToken, authController.updateLocation);
 
 module.exports = router;
