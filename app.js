@@ -8,6 +8,7 @@ require('dotenv').config();
 
 const authRoutes = require('./src/routes/authRoutes');
 const matchRoutes = require('./src/routes/matchRoutes');
+const userRoutes = require('./src/routes/userRoutes');
 const { authenticateToken } = require('./src/middleware/auth');
 
 const app = express();
@@ -22,6 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/matches', matchRoutes);
+app.use('/api/users', userRoutes);
 
 // Home route (protected)
 app.get('/api/home', authenticateToken, (req, res) => {

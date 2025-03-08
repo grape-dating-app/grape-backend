@@ -41,13 +41,32 @@ const getUserMatches = async (req, res) => {
     try {
         const userId = req.params.userId;
         
+        // First check if the user exists and get available columns
+        const userCheckQuery = 'SELECT * FROM users WHERE id = $1';
+        const userCheck = await pool.query(userCheckQuery, [userId]);
+        
+        if (userCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Determine which column to use for user identification
+        const userColumns = Object.keys(userCheck.rows[0]);
+        let userIdentifierColumn = 'name'; // default to name
+        if (userColumns.includes('name')) {
+            userIdentifierColumn = 'name';
+        } else if (userColumns.includes('full_name')) {
+            userIdentifierColumn = 'full_name';
+        } else if (userColumns.includes('email')) {
+            userIdentifierColumn = 'email';
+        }
+        
         const matchesQuery = `
             SELECT 
                 m.*,
                 CASE 
-                    WHEN m.user1_id = $1 THEN u2.username
-                    ELSE u1.username
-                END as matched_username
+                    WHEN m.user1_id = $1 THEN u2.${userIdentifierColumn}
+                    ELSE u1.${userIdentifierColumn}
+                END as matched_user_identifier
             FROM matches m
             JOIN users u1 ON m.user1_id = u1.id
             JOIN users u2 ON m.user2_id = u2.id
@@ -58,8 +77,18 @@ const getUserMatches = async (req, res) => {
         const result = await pool.query(matchesQuery, [userId]);
         res.json(result.rows);
     } catch (error) {
-        console.error('Error getting matches:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error('Error getting matches:', error.message);
+        console.error('Error details:', {
+            code: error.code,
+            detail: error.detail,
+            table: error.table,
+            constraint: error.constraint,
+            stack: error.stack
+        });
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message
+        });
     }
 };
 
