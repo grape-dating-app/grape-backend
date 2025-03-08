@@ -1,11 +1,15 @@
-// File: src/config/db.js
-
 const { createClient } = require('@supabase/supabase-js');
 const { Pool } = require('pg');
 require('dotenv').config();
 
+// Check required environment variables
 if (!process.env.POSTGRES_CONNECTION_STRING) {
   console.error('POSTGRES_CONNECTION_STRING is not set in environment variables');
+  process.exit(1);
+}
+
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+  console.error('Missing Supabase configuration. Please check your .env file.');
   process.exit(1);
 }
 

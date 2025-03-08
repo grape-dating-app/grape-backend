@@ -19,6 +19,7 @@
     "nodemailer": "^6.10.0",
     "pg": "^8.13.3",
     "pg-format": "^1.0.4",
+    "socket.io": "^4.8.1",
     "yup": "^1.6.1"
   },
   "devDependencies": {

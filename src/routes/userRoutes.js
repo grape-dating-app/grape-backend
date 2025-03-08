@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { updateUser, deleteUser } = require('../controller/userController');
+const { updateUser, deleteUser } = require('../controllers/userController');
 const { authenticateToken } = require('../middleware/auth');
 
 // Apply authentication middleware to all user routes
